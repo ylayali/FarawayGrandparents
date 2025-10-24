@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import Stripe from 'stripe';
-import { createClient } from '@/lib/supabase-server';
+import { getDatabases } from '@/lib/appwrite-server';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -18,8 +18,8 @@ export async function POST(request: NextRequest) {
       signature,
       process.env.STRIPE_WEBHOOK_SECRET!
     );
-  } catch (err: any) {
-    console.error('Webhook signature verification failed:', err.message);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', (err as Error).message);
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
   }
 
@@ -42,36 +42,31 @@ export async function POST(request: NextRequest) {
 
     try {
       // Update user credits in database
-      const supabase = await createClient();
+      const databases = await getDatabases();
       
       // First, get current credits
-      const { data: currentProfile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('credits')
-        .eq('id', userId)
-        .single();
+      const currentProfile = await databases.getDocument(
+        process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+        process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+        userId
+      );
 
-      if (fetchError || !currentProfile) {
-        console.error('Error fetching user profile:', fetchError);
+      if (!currentProfile) {
+        console.error('Error fetching user profile');
         return NextResponse.json({ error: 'User not found' }, { status: 404 });
       }
 
       // Add credits to current total
       const newCredits = currentProfile.credits + creditsToAdd;
 
-      const { data, error } = await supabase
-        .from('profiles')
-        .update({ 
-          credits: newCredits,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', userId)
-        .select();
-
-      if (error) {
-        console.error('Error updating credits:', error);
-        return NextResponse.json({ error: 'Failed to update credits' }, { status: 500 });
-      }
+      await databases.updateDocument(
+        process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+        process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+        userId,
+        { 
+          credits: newCredits
+        }
+      );
 
       console.log(`Successfully added ${creditsToAdd} credits to user ${userId}. New total: ${newCredits}`);
 

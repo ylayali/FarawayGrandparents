@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
 import Stripe from 'stripe';
-import { createClient } from '@/lib/supabase-server';
+import { getDatabases } from '@/lib/appwrite-server';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -17,14 +16,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user exists in our database
-    const supabase = await createClient();
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, email, full_name')
-      .eq('id', userId)
-      .single();
+    const databases = await getDatabases();
+    const profile = await databases.getDocument(
+      process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+      process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+      userId
+    );
 
-    if (profileError || !profile) {
+    if (!profile) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
@@ -42,7 +41,7 @@ export async function POST(request: NextRequest) {
               name: '10 Coloring Page Credits',
               description: 'Generate 10 custom coloring pages',
             },
-            unit_amount: 700, // $7.00 in cents
+            unit_amount: 900, // $9.00 in cents
           },
           quantity: 1,
         },

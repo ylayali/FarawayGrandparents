@@ -1,16 +1,17 @@
 'use client'
 
-import { createClient } from '@/lib/supabase'
-import { User } from '@supabase/supabase-js'
+import { getAccount, getDatabases } from '@/lib/appwrite'
+import { Models } from 'appwrite'
 import { createContext, useContext, useEffect, useState } from 'react'
+import { ID } from 'appwrite'
 
 type AuthContextType = {
-  user: User | null
+  user: Models.User<Models.Preferences> | null
   loading: boolean
-  signUp: (email: string, password: string, fullName: string) => Promise<{ error: any }>
-  signIn: (email: string, password: string) => Promise<{ error: any }>
-  signOut: () => Promise<{ error: any }>
-  resetPassword: (email: string) => Promise<{ error: any }>
+  signUp: (email: string, password: string, fullName: string) => Promise<{ error: unknown }>
+  signIn: (email: string, password: string) => Promise<{ error: unknown }>
+  signOut: () => Promise<{ error: unknown }>
+  resetPassword: (email: string) => Promise<{ error: unknown }>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -24,98 +25,120 @@ export function useAuth() {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<Models.User<Models.Preferences> | null>(null)
   const [loading, setLoading] = useState(true)
-  const supabase = createClient()
 
   useEffect(() => {
     // Get initial session
     const getInitialSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      setUser(session?.user ?? null)
-      setLoading(false)
+      try {
+        const account = getAccount()
+        const currentUser = await account.get()
+        setUser(currentUser)
+        
+        // Store session in cookie for server-side usage
+        const session = await account.getSession('current')
+        document.cookie = `appwrite-session=${session.secret}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=strict`
+      } catch {
+        setUser(null)
+      } finally {
+        setLoading(false)
+      }
     }
 
     getInitialSession()
-
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        setUser(session?.user ?? null)
-        setLoading(false)
-      }
-    )
-
-    return () => subscription.unsubscribe()
-  }, [supabase.auth])
+  }, [])
 
   const signUp = async (email: string, password: string, fullName: string) => {
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const account = getAccount()
+      const databases = getDatabases()
+      
+      // Create account
+      const newUser = await account.create(
+        ID.unique(),
         email,
         password,
-        options: {
-          data: {
-            full_name: fullName,
-            credits: 10 // Give new users 10 credits to start
-          }
-        }
-      })
+        fullName
+      )
       
-      if (error) throw error
+      // Sign in to create session
+      await account.createEmailPasswordSession(email, password)
       
-      // If sign up was successful, create user profile
-      if (data.user) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: data.user.email,
-            full_name: fullName,
-            credits: 10,
-            subscription_tier: 'free',
-            created_at: new Date().toISOString()
-          })
-        
-        if (profileError) {
-          console.error('Profile creation error:', profileError)
+      // Create user profile in database
+      await databases.createDocument(
+        process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+        process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+        newUser.$id,
+        {
+          email: email,
+          full_name: fullName,
+          credits: 3,
+          subscription_tier: 'free'
         }
-      }
+      )
+      
+      // Update local state
+      const currentUser = await account.get()
+      setUser(currentUser)
+      
+      // Store session in cookie
+      const session = await account.getSession('current')
+      document.cookie = `appwrite-session=${session.secret}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=strict`
       
       return { error: null }
     } catch (error) {
+      console.error('Sign up error:', error)
       return { error }
     }
   }
 
   const signIn = async (email: string, password: string) => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      })
-      return { error }
+      const account = getAccount()
+      await account.createEmailPasswordSession(email, password)
+      
+      // Update local state
+      const currentUser = await account.get()
+      setUser(currentUser)
+      
+      // Store session in cookie
+      const session = await account.getSession('current')
+      document.cookie = `appwrite-session=${session.secret}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=strict`
+      
+      return { error: null }
     } catch (error) {
+      console.error('Sign in error:', error)
       return { error }
     }
   }
 
   const signOut = async () => {
     try {
-      const { error } = await supabase.auth.signOut()
-      return { error }
+      const account = getAccount()
+      await account.deleteSession('current')
+      setUser(null)
+      
+      // Clear session cookie
+      document.cookie = 'appwrite-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      
+      return { error: null }
     } catch (error) {
+      console.error('Sign out error:', error)
       return { error }
     }
   }
 
   const resetPassword = async (email: string) => {
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`
-      })
-      return { error }
+      const account = getAccount()
+      await account.createRecovery(
+        email,
+        `${window.location.origin}/reset-password`
+      )
+      return { error: null }
     } catch (error) {
+      console.error('Password reset error:', error)
       return { error }
     }
   }

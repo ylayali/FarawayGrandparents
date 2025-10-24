@@ -27,11 +27,11 @@ import { WebcamCapture } from '@/components/webcam-capture';
 export type { ColoringPageFormData };
 
 type ColoringPageFormProps = {
-    onSubmit: (data: ColoringPageFormData) => void;
+    onSubmitAction: (data: ColoringPageFormData) => void;
     isLoading: boolean;
     isPasswordRequiredByBackend: boolean | null;
     clientPasswordHash: string | null;
-    onOpenPasswordDialog: () => void;
+    onOpenPasswordDialogAction: () => void;
 };
 
 const RadioItemWithIcon = ({
@@ -59,11 +59,11 @@ const RadioItemWithIcon = ({
 );
 
 export function ColoringPageForm({
-    onSubmit,
+    onSubmitAction,
     isLoading,
     isPasswordRequiredByBackend,
     clientPasswordHash,
-    onOpenPasswordDialog
+    onOpenPasswordDialogAction
 }: ColoringPageFormProps) {
     const [type, setType] = React.useState<ColoringPageType>('straight-copy');
     const [imageFiles, setImageFiles] = React.useState<File[]>([]);
@@ -76,7 +76,7 @@ export function ColoringPageForm({
     const [isWebcamOpen, setIsWebcamOpen] = React.useState(false);
 
     // Determine max images based on type
-    const maxImages = type === 'straight-copy' ? 1 : 5;
+    const maxImages = type === 'straight-copy' ? 1 : 4;
 
     // Update individual names array when image count changes
     React.useEffect(() => {
@@ -263,7 +263,7 @@ export function ColoringPageForm({
             sceneDescription: background === 'scene' ? sceneDescription : undefined
         };
 
-        onSubmit(formData);
+        onSubmitAction(formData);
     };
 
     return (
@@ -277,7 +277,7 @@ export function ColoringPageForm({
                             <Button
                                 variant='ghost'
                                 size='icon'
-                                onClick={onOpenPasswordDialog}
+                                onClick={onOpenPasswordDialogAction}
                                 className='ml-2 text-white/60 hover:text-white'
                                 aria-label='Configure Password'>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
@@ -469,7 +469,7 @@ export function ColoringPageForm({
                                     className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
                                 />
                                 <Label htmlFor='bg-mindful' className='cursor-pointer text-base text-white/80'>
-                                    Mindful Pattern
+                                    Mindful Coloring
                                 </Label>
                             </div>
                             {type !== 'straight-copy' && (

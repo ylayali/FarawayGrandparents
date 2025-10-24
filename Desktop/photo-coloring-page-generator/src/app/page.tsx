@@ -2,8 +2,7 @@
 
 import { ColoringPageForm, type ColoringPageFormData } from '@/components/coloring-page-form';
 import { type EditingFormData } from '@/components/editing-form';
-import { GenerationForm, type GenerationFormData } from '@/components/generation-form';
-import { HistoryPanel } from '@/components/history-panel';
+import { type GenerationFormData } from '@/components/generation-form';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
 import { AuthModal } from '@/components/auth-modal';
@@ -12,7 +11,7 @@ import { useAuth } from '@/components/auth-context';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { db, type ImageRecord } from '@/lib/db';
-import { createClient } from '@/lib/supabase';
+import { getDatabases } from '@/lib/appwrite';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LogIn } from 'lucide-react';
 import * as React from 'react';
@@ -32,12 +31,6 @@ export type HistoryMetadata = {
     prompt: string;
     mode: 'generate' | 'edit';
     output_format?: GenerationFormData['output_format'];
-};
-
-type DrawnPoint = {
-    x: number;
-    y: number;
-    size: number;
 };
 
 const MAX_EDIT_IMAGES = 10;
@@ -86,54 +79,25 @@ export default function HomePage() {
     const [isPasswordDialogOpen, setIsPasswordDialogOpen] = React.useState(false);
     const [passwordDialogContext, setPasswordDialogContext] = React.useState<'initial' | 'retry'>('initial');
     const [lastApiCallArgs, setLastApiCallArgs] = React.useState<[GenerationFormData | ColoringPageFormData] | null>(null);
-    const [skipDeleteConfirmation, setSkipDeleteConfirmation] = React.useState<boolean>(false);
-    const [itemToDeleteConfirm, setItemToDeleteConfirm] = React.useState<HistoryMetadata | null>(null);
-    const [dialogCheckboxStateSkipConfirm, setDialogCheckboxStateSkipConfirm] = React.useState<boolean>(false);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
 
     const [editImageFiles, setEditImageFiles] = React.useState<File[]>([]);
     const [editSourceImagePreviewUrls, setEditSourceImagePreviewUrls] = React.useState<string[]>([]);
-    const [editPrompt, setEditPrompt] = React.useState('');
-    const [editN, setEditN] = React.useState([1]);
-    const [editSize, setEditSize] = React.useState<EditingFormData['size']>('auto');
-    const [editQuality, setEditQuality] = React.useState<EditingFormData['quality']>('auto');
-    const [editBrushSize, setEditBrushSize] = React.useState([20]);
-    const [editShowMaskEditor, setEditShowMaskEditor] = React.useState(false);
-    const [editGeneratedMaskFile, setEditGeneratedMaskFile] = React.useState<File | null>(null);
-    const [editIsMaskSaved, setEditIsMaskSaved] = React.useState(false);
-    const [editOriginalImageSize, setEditOriginalImageSize] = React.useState<{ width: number; height: number } | null>(
-        null
-    );
-    const [editDrawnPoints, setEditDrawnPoints] = React.useState<DrawnPoint[]>([]);
-    const [editMaskPreviewUrl, setEditMaskPreviewUrl] = React.useState<string | null>(null);
+    const [editPrompt] = React.useState('');
+    const [editN] = React.useState([1]);
+    const [editSize] = React.useState<EditingFormData['size']>('auto');
+    const [editQuality] = React.useState<EditingFormData['quality']>('high');
+    const [editGeneratedMaskFile] = React.useState<File | null>(null);
 
-    const [genPrompt, setGenPrompt] = React.useState('');
-    const [genN, setGenN] = React.useState([1]);
-    const [genSize, setGenSize] = React.useState<GenerationFormData['size']>('auto');
-    const [genQuality, setGenQuality] = React.useState<GenerationFormData['quality']>('auto');
-    const [genOutputFormat, setGenOutputFormat] = React.useState<GenerationFormData['output_format']>('png');
-    const [genCompression, setGenCompression] = React.useState([100]);
-    const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
-    const [genModeration, setGenModeration] = React.useState<GenerationFormData['moderation']>('auto');
+    const [genPrompt] = React.useState('');
+    const [genN] = React.useState([1]);
+    const [genSize] = React.useState<GenerationFormData['size']>('auto');
+    const [genQuality] = React.useState<GenerationFormData['quality']>('high');
+    const [genOutputFormat] = React.useState<GenerationFormData['output_format']>('png');
+    const [genBackground] = React.useState<GenerationFormData['background']>('auto');
+    const [genModeration] = React.useState<GenerationFormData['moderation']>('auto');
 
-    const getImageSrc = React.useCallback(
-        (filename: string): string | undefined => {
-            if (blobUrlCache[filename]) {
-                return blobUrlCache[filename];
-            }
-
-            const record = allDbImages?.find((img) => img.filename === filename);
-            if (record?.blob) {
-                const url = URL.createObjectURL(record.blob);
-
-                return url;
-            }
-
-            return undefined;
-        },
-        [allDbImages, blobUrlCache]
-    );
 
     React.useEffect(() => {
         return () => {
@@ -209,18 +173,6 @@ export default function HomePage() {
         };
     }, [editSourceImagePreviewUrls]);
 
-    React.useEffect(() => {
-        const storedPref = localStorage.getItem('imageGenSkipDeleteConfirm');
-        if (storedPref === 'true') {
-            setSkipDeleteConfirmation(true);
-        } else if (storedPref === 'false') {
-            setSkipDeleteConfirmation(false);
-        }
-    }, []);
-
-    React.useEffect(() => {
-        localStorage.setItem('imageGenSkipDeleteConfirm', String(skipDeleteConfirmation));
-    }, [skipDeleteConfirmation]);
 
     React.useEffect(() => {
         const handlePaste = (event: ClipboardEvent) => {
@@ -318,16 +270,16 @@ export default function HomePage() {
         // Calculate credits required based on number of photos
         const creditsRequired = formData.imageFiles.length > 1 ? 2 : 1;
         
-        // Check user's current credits from Supabase
-        const supabase = createClient();
+        // Check user's current credits from Appwrite
+        const databases = getDatabases();
         try {
-            const { data: profile, error: profileError } = await supabase
-                .from('profiles')
-                .select('credits')
-                .eq('id', user.id)
-                .single();
+            const profile = await databases.getDocument(
+                process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+                process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+                user.$id
+            );
 
-            if (profileError || !profile) {
+            if (!profile) {
                 setError('Unable to verify your credits. Please refresh the page and try again.');
                 return;
             }
@@ -413,34 +365,34 @@ export default function HomePage() {
                 // Deduct credits after successful generation
                 try {
                     // Fetch current credits first
-                    const { data: currentProfile, error: fetchError } = await supabase
-                        .from('profiles')
-                        .select('credits')
-                        .eq('id', user.id)
-                        .single();
+                    const currentProfile = await databases.getDocument(
+                        process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+                        process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+                        user.$id
+                    );
 
-                    if (fetchError || !currentProfile) {
-                        console.error('Error fetching current credits for deduction:', fetchError);
+                    if (!currentProfile) {
+                        console.error('Error fetching current credits for deduction');
                         setError(`Generation successful but failed to deduct ${creditsRequired} credit${creditsRequired > 1 ? 's' : ''}. Please contact support.`);
                     } else {
                         // Calculate new credit amount
                         const newCredits = currentProfile.credits - creditsRequired;
                         
                         // Update with the calculated value
-                        const { error: deductError } = await supabase
-                            .from('profiles')
-                            .update({ 
-                                credits: newCredits,
-                                updated_at: new Date().toISOString()
-                            })
-                            .eq('id', user.id);
-
-                        if (deductError) {
+                        try {
+                            await databases.updateDocument(
+                                process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+                                process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+                                user.$id,
+                                { 
+                                    credits: newCredits
+                                }
+                            );
+                            console.log(`Successfully deducted ${creditsRequired} credit${creditsRequired > 1 ? 's' : ''} (${currentProfile.credits} → ${newCredits})`);
+                        } catch (deductError) {
                             console.error('Error deducting credits:', deductError);
                             // Don't fail the generation, just log the error
                             setError(`Generation successful but failed to deduct ${creditsRequired} credit${creditsRequired > 1 ? 's' : ''}. Please contact support.`);
-                        } else {
-                            console.log(`Successfully deducted ${creditsRequired} credit${creditsRequired > 1 ? 's' : ''} (${currentProfile.credits} → ${newCredits})`);
                         }
                     }
                 } catch (creditError) {
@@ -454,7 +406,7 @@ export default function HomePage() {
                     images: result.images.map((img: { filename: string }) => ({ filename: img.filename })),
                     storageModeUsed: effectiveStorageModeClient,
                     durationMs: durationMs,
-                    quality: 'medium',
+                    quality: 'high',
                     background: 'auto',
                     moderation: 'auto',
                     output_format: 'png',
@@ -712,75 +664,6 @@ export default function HomePage() {
         }
     };
 
-    const handleHistorySelect = (item: HistoryMetadata) => {
-        console.log(
-            `Selecting history item from ${new Date(item.timestamp).toISOString()}, stored via: ${item.storageModeUsed}`
-        );
-        const originalStorageMode = item.storageModeUsed || 'fs';
-
-        const selectedBatchPromises = item.images.map(async (imgInfo) => {
-            let path: string | undefined;
-            if (originalStorageMode === 'indexeddb') {
-                path = getImageSrc(imgInfo.filename);
-            } else {
-                path = `/api/image/${imgInfo.filename}`;
-            }
-
-            if (path) {
-                return { path, filename: imgInfo.filename };
-            } else {
-                console.warn(
-                    `Could not get image source for history item: ${imgInfo.filename} (mode: ${originalStorageMode})`
-                );
-                setError(`Image ${imgInfo.filename} could not be loaded.`);
-                return null;
-            }
-        });
-
-        Promise.all(selectedBatchPromises).then((resolvedBatch) => {
-            const validImages = resolvedBatch.filter(Boolean) as { path: string; filename: string }[];
-
-            if (validImages.length !== item.images.length && !error) {
-                setError(
-                    'Some images from this history entry could not be loaded (they might have been cleared or are missing).'
-                );
-            } else if (validImages.length === item.images.length) {
-                setError(null);
-            }
-
-            setLatestImageBatch(validImages.length > 0 ? validImages : null);
-            setImageOutputView(validImages.length > 1 ? 'grid' : 0);
-        });
-    };
-
-    const handleClearHistory = async () => {
-        const confirmationMessage =
-            effectiveStorageModeClient === 'indexeddb'
-                ? 'Are you sure you want to clear the entire image history? In IndexedDB mode, this will also permanently delete all stored images. This cannot be undone.'
-                : 'Are you sure you want to clear the entire image history? This cannot be undone.';
-
-        if (window.confirm(confirmationMessage)) {
-            setHistory([]);
-            setLatestImageBatch(null);
-            setImageOutputView('grid');
-            setError(null);
-
-            try {
-                localStorage.removeItem('openaiImageHistory');
-                console.log('Cleared history metadata from localStorage.');
-
-                if (effectiveStorageModeClient === 'indexeddb') {
-                    await db.images.clear();
-                    console.log('Cleared images from IndexedDB.');
-
-                    setBlobUrlCache({});
-                }
-            } catch (e) {
-                console.error('Failed during history clearing:', e);
-                setError(`Failed to clear history: ${e instanceof Error ? e.message : String(e)}`);
-            }
-        }
-    };
 
     const handleSendToEdit = async (filename: string) => {
         if (isSendingToEdit) return;
@@ -854,76 +737,7 @@ export default function HomePage() {
         }
     };
 
-    const executeDeleteItem = async (item: HistoryMetadata) => {
-        if (!item) return;
-        console.log(`Executing delete for history item timestamp: ${item.timestamp}`);
-        setError(null); // Clear previous errors
 
-        const { images: imagesInEntry, storageModeUsed, timestamp } = item;
-        const filenamesToDelete = imagesInEntry.map((img) => img.filename);
-
-        try {
-            if (storageModeUsed === 'indexeddb') {
-                console.log('Deleting from IndexedDB:', filenamesToDelete);
-                await db.images.where('filename').anyOf(filenamesToDelete).delete();
-                setBlobUrlCache((prevCache) => {
-                    const newCache = { ...prevCache };
-                    filenamesToDelete.forEach((fn) => delete newCache[fn]);
-                    return newCache;
-                });
-                console.log('Successfully deleted from IndexedDB and cleared blob cache.');
-            } else if (storageModeUsed === 'fs') {
-                console.log('Requesting deletion from filesystem via API:', filenamesToDelete);
-                const apiPayload: { filenames: string[]; passwordHash?: string } = { filenames: filenamesToDelete };
-                if (isPasswordRequiredByBackend && clientPasswordHash) {
-                    apiPayload.passwordHash = clientPasswordHash;
-                }
-
-                const response = await fetch('/api/image-delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(apiPayload)
-                });
-
-                const result = await response.json();
-                if (!response.ok) {
-                    console.error('API deletion error:', result);
-                    throw new Error(result.error || `API deletion failed with status ${response.status}`);
-                }
-                console.log('API deletion successful:', result);
-            }
-
-            setHistory((prevHistory) => prevHistory.filter((h) => h.timestamp !== timestamp));
-            if (latestImageBatch && latestImageBatch.some((img) => filenamesToDelete.includes(img.filename))) {
-                setLatestImageBatch(null); // Clear current view if it contained deleted images
-            }
-        } catch (e: unknown) {
-            console.error('Error during item deletion:', e);
-            setError(e instanceof Error ? e.message : 'An unexpected error occurred during deletion.');
-        } finally {
-            setItemToDeleteConfirm(null); // Always close dialog
-        }
-    };
-
-    const handleRequestDeleteItem = (item: HistoryMetadata) => {
-        if (!skipDeleteConfirmation) {
-            setDialogCheckboxStateSkipConfirm(skipDeleteConfirmation);
-            setItemToDeleteConfirm(item);
-        } else {
-            executeDeleteItem(item);
-        }
-    };
-
-    const handleConfirmDeletion = () => {
-        if (itemToDeleteConfirm) {
-            executeDeleteItem(itemToDeleteConfirm);
-            setSkipDeleteConfirmation(dialogCheckboxStateSkipConfirm);
-        }
-    };
-
-    const handleCancelDeletion = () => {
-        setItemToDeleteConfirm(null);
-    };
 
     return (
         <main className='flex min-h-screen flex-col items-center bg-black p-4 text-white md:p-8 lg:p-12'>
@@ -966,11 +780,11 @@ export default function HomePage() {
                 <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
                     <div className='relative flex min-h-[80vh] flex-col lg:col-span-1'>
                         <ColoringPageForm
-                            onSubmit={handleColoringPageSubmit}
+                            onSubmitAction={handleColoringPageSubmit}
                             isLoading={isLoading || isSendingToEdit}
                             isPasswordRequiredByBackend={isPasswordRequiredByBackend}
                             clientPasswordHash={clientPasswordHash}
-                            onOpenPasswordDialog={handleOpenPasswordDialog}
+                            onOpenPasswordDialogAction={handleOpenPasswordDialog}
                         />
                     </div>
                     <div className='flex min-h-[80vh] flex-col lg:col-span-1'>
