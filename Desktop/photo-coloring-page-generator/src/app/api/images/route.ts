@@ -1,15 +1,13 @@
 import crypto from 'crypto';
-import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import path from 'path';
+import { getStorage } from '@/lib/appwrite-server';
+import { ID } from 'node-appwrite';
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     baseURL: process.env.OPENAI_API_BASE_URL
 });
-
-const outputDir = path.resolve(process.cwd(), 'generated-images');
 
 // Define valid output formats for type safety
 const VALID_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
@@ -27,27 +25,6 @@ function validateOutputFormat(format: unknown): ValidOutputFormat {
     }
 
     return 'png'; // default fallback
-}
-
-async function ensureOutputDirExists() {
-    try {
-        await fs.access(outputDir);
-    } catch (error: unknown) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-            try {
-                await fs.mkdir(outputDir, { recursive: true });
-                console.log(`Created output directory: ${outputDir}`);
-            } catch (mkdirError) {
-                console.error(`Error creating output directory ${outputDir}:`, mkdirError);
-                throw new Error('Failed to create image output directory.');
-            }
-        } else {
-            console.error(`Error accessing output directory ${outputDir}:`, error);
-            throw new Error(
-                `Failed to access or ensure image output directory exists. Original error: ${error instanceof Error ? error.message : String(error)}`
-            );
-        }
-    }
 }
 
 function sha256(data: string): string {
@@ -217,26 +194,19 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Server configuration error: API key not found.' }, { status: 500 });
     }
     try {
-        let effectiveStorageMode: 'fs' | 'indexeddb';
+        let effectiveStorageMode: 'appwrite' | 'indexeddb';
         const explicitMode = process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE;
         const isOnVercel = process.env.VERCEL === '1';
 
-        if (explicitMode === 'fs') {
-            effectiveStorageMode = 'fs';
-        } else if (explicitMode === 'indexeddb') {
-            effectiveStorageMode = 'indexeddb';
-        } else if (isOnVercel) {
+        // Always use Appwrite storage on server, unless explicitly set to indexeddb
+        if (explicitMode === 'indexeddb') {
             effectiveStorageMode = 'indexeddb';
         } else {
-            effectiveStorageMode = 'fs';
+            effectiveStorageMode = 'appwrite';
         }
         console.log(
             `Effective Image Storage Mode: ${effectiveStorageMode} (Explicit: ${explicitMode || 'unset'}, Vercel: ${isOnVercel})`
         );
-
-        if (effectiveStorageMode === 'fs') {
-            await ensureOutputDirExists();
-        }
 
         const formData = await request.formData();
 
@@ -414,22 +384,41 @@ export async function POST(request: NextRequest) {
                 const fileExtension = validateOutputFormat(formData.get('output_format'));
                 const filename = `${timestamp}-${index}.${fileExtension}`;
 
-                if (effectiveStorageMode === 'fs') {
-                    const filepath = path.join(outputDir, filename);
-                    console.log(`Attempting to save image to: ${filepath}`);
-                    await fs.writeFile(filepath, buffer);
-                    console.log(`Successfully saved image: ${filename}`);
-                } else {
+                let fileId: string | undefined;
+                
+                if (effectiveStorageMode === 'appwrite') {
+                    try {
+                        // Upload to Appwrite Storage
+                        const storage = await getStorage();
+                        const bucketId = process.env.NEXT_PUBLIC_APPWRITE_IMAGES_BUCKET_ID!;
+                        
+                        // Create a File object from the buffer
+                        const mimeType = fileExtension === 'png' ? 'image/png' : fileExtension === 'jpeg' ? 'image/jpeg' : 'image/webp';
+                        const file = new File([buffer], filename, { type: mimeType });
+                        
+                        const uploadResult = await storage.createFile(
+                            bucketId,
+                            ID.unique(),
+                            file
+                        );
+                        
+                        fileId = uploadResult.$id;
+                        console.log(`Successfully uploaded image to Appwrite: ${fileId}`);
+                    } catch (error) {
+                        console.error('Error uploading to Appwrite Storage:', error);
+                        // Fall back to base64 if upload fails
+                    }
                 }
 
-                const imageResult: { filename: string; b64_json: string; path?: string; output_format: string } = {
+                const imageResult: { filename: string; b64_json: string; fileId?: string; path?: string; output_format: string } = {
                     filename: filename,
                     b64_json: imageData.b64_json,
                     output_format: fileExtension
                 };
 
-                if (effectiveStorageMode === 'fs') {
-                    imageResult.path = `/api/image/${filename}`;
+                if (fileId) {
+                    imageResult.fileId = fileId;
+                    imageResult.path = `/api/image/${fileId}`;
                 }
 
                 return imageResult;

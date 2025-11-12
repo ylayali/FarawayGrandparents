@@ -1,8 +1,9 @@
-import { Client, Account, Databases } from 'appwrite'
+import { Client, Account, Databases, Storage } from 'appwrite'
 
 let client: Client | null = null
 let account: Account | null = null
 let databases: Databases | null = null
+let storage: Storage | null = null
 
 export function createClient() {
   if (!client) {
@@ -25,4 +26,11 @@ export function getDatabases() {
     databases = new Databases(createClient())
   }
   return databases
+}
+
+export function getStorage() {
+  if (!storage) {
+    storage = new Storage(createClient())
+  }
+  return storage
 }

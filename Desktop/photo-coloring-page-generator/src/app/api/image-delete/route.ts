@@ -1,9 +1,6 @@
 import crypto from 'crypto';
-import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
-import path from 'path';
-
-const outputDir = path.resolve(process.cwd(), 'generated-images');
+import { getStorage } from '@/lib/appwrite-server';
 
 function sha256(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex');
@@ -60,6 +57,8 @@ export async function POST(request: NextRequest) {
     }
 
     const deletionResults: FileDeletionResult[] = [];
+    const storage = await getStorage();
+    const bucketId = process.env.NEXT_PUBLIC_APPWRITE_IMAGES_BUCKET_ID!;
 
     for (const filename of filenames) {
         if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
@@ -68,15 +67,14 @@ export async function POST(request: NextRequest) {
             continue;
         }
 
-        const filepath = path.join(outputDir, filename);
-
         try {
-            await fs.unlink(filepath);
-            console.log(`Successfully deleted image: ${filepath}`);
+            // Delete from Appwrite Storage
+            await storage.deleteFile(bucketId, filename);
+            console.log(`Successfully deleted image from Appwrite: ${filename}`);
             deletionResults.push({ filename, success: true });
         } catch (error: unknown) {
-            console.error(`Error deleting image ${filepath}:`, error);
-            if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            console.error(`Error deleting image ${filename}:`, error);
+            if (typeof error === 'object' && error !== null && 'code' in error && (error.code === 404 || error.code === 'ENOENT')) {
                 deletionResults.push({ filename, success: false, error: 'File not found.' });
             } else {
                 deletionResults.push({ filename, success: false, error: 'Failed to delete file.' });

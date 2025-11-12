@@ -1,4 +1,4 @@
-import { Client, Account, Databases } from 'node-appwrite'
+import { Client, Account, Databases, Storage } from 'node-appwrite'
 import { cookies } from 'next/headers'
 
 export async function createClient() {
@@ -13,6 +13,11 @@ export async function createClient() {
     client.setSession(session)
   }
 
+  // For server-side storage operations with API key
+  if (process.env.APPWRITE_API_KEY) {
+    client.setKey(process.env.APPWRITE_API_KEY)
+  }
+
   return client
 }
 
@@ -24,4 +29,9 @@ export async function getAccount() {
 export async function getDatabases() {
   const client = await createClient()
   return new Databases(client)
+}
+
+export async function getStorage() {
+  const client = await createClient()
+  return new Storage(client)
 }

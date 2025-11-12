@@ -86,7 +86,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
       if (isSignUp) {
         const { error } = await signUp(email.trim(), password, fullName.trim())
         if (error) {
-          setError(error.message || 'Failed to create account')
+          setError(error instanceof Error ? error.message : 'Failed to create account')
         } else {
           setSuccess('Account created! Please check your email to verify your account.')
           setEmail('')
@@ -97,7 +97,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
       } else {
         const { error } = await signIn(email.trim(), password)
         if (error) {
-          setError(error.message || 'Failed to sign in')
+          setError(error instanceof Error ? error.message : 'Failed to sign in')
         } else {
           handleClose()
         }
