@@ -1,0 +1,822 @@
+'use client';
+
+import { ColoringPageForm, type ColoringPageFormData } from '@/components/coloring-page-form';
+import { type EditingFormData } from '@/components/editing-form';
+import { type GenerationFormData } from '@/components/generation-form';
+import { ImageOutput } from '@/components/image-output';
+import { PasswordDialog } from '@/components/password-dialog';
+import { AuthModal } from '@/components/auth-modal';
+import { UserProfile } from '@/components/user-profile';
+import { useAuth } from '@/components/auth-context';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { db, type ImageRecord } from '@/lib/db';
+import { getDatabases } from '@/lib/appwrite';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { LogIn } from 'lucide-react';
+import * as React from 'react';
+
+type HistoryImage = {
+    filename: string;
+};
+
+export type HistoryMetadata = {
+    timestamp: number;
+    images: HistoryImage[];
+    storageModeUsed?: 'fs' | 'indexeddb';
+    durationMs: number;
+    quality: GenerationFormData['quality'];
+    background: GenerationFormData['background'];
+    moderation: GenerationFormData['moderation'];
+    prompt: string;
+    mode: 'generate' | 'edit';
+    output_format?: GenerationFormData['output_format'];
+};
+
+const MAX_EDIT_IMAGES = 10;
+
+const explicitModeClient = process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE;
+
+const vercelEnvClient = process.env.NEXT_PUBLIC_VERCEL_ENV;
+const isOnVercelClient = vercelEnvClient === 'production' || vercelEnvClient === 'preview';
+
+let effectiveStorageModeClient: 'fs' | 'indexeddb';
+
+if (explicitModeClient === 'fs') {
+    effectiveStorageModeClient = 'fs';
+} else if (explicitModeClient === 'indexeddb') {
+    effectiveStorageModeClient = 'indexeddb';
+} else if (isOnVercelClient) {
+    effectiveStorageModeClient = 'indexeddb';
+} else {
+    effectiveStorageModeClient = 'fs';
+}
+console.log(
+    `Client Effective Storage Mode: ${effectiveStorageModeClient} (Explicit: ${explicitModeClient || 'unset'}, Vercel Env: ${vercelEnvClient || 'N/A'})`
+);
+
+type ApiImageResponseItem = {
+    filename: string;
+    b64_json?: string;
+    output_format: string;
+    path?: string;
+};
+
+export default function HomePage() {
+    const { user, loading: authLoading } = useAuth()
+    const [isAuthModalOpen, setIsAuthModalOpen] = React.useState(false)
+    const [mode, setMode] = React.useState<'generate' | 'edit'>('edit');
+    const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
+    const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
+    const [isLoading, setIsLoading] = React.useState(false);
+    const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
+    const [error, setError] = React.useState<string | null>(null);
+    const [latestImageBatch, setLatestImageBatch] = React.useState<{ path: string; filename: string }[] | null>(null);
+    const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
+    const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
+    const [isInitialLoad, setIsInitialLoad] = React.useState(true);
+    const [blobUrlCache, setBlobUrlCache] = React.useState<Record<string, string>>({});
+    const [isPasswordDialogOpen, setIsPasswordDialogOpen] = React.useState(false);
+    const [passwordDialogContext, setPasswordDialogContext] = React.useState<'initial' | 'retry'>('initial');
+    const [lastApiCallArgs, setLastApiCallArgs] = React.useState<[GenerationFormData | ColoringPageFormData] | null>(null);
+
+    const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
+
+    const [editImageFiles, setEditImageFiles] = React.useState<File[]>([]);
+    const [editSourceImagePreviewUrls, setEditSourceImagePreviewUrls] = React.useState<string[]>([]);
+    const [editPrompt] = React.useState('');
+    const [editN] = React.useState([1]);
+    const [editSize] = React.useState<EditingFormData['size']>('auto');
+    const [editQuality] = React.useState<EditingFormData['quality']>('high');
+    const [editGeneratedMaskFile] = React.useState<File | null>(null);
+
+    const [genPrompt] = React.useState('');
+    const [genN] = React.useState([1]);
+    const [genSize] = React.useState<GenerationFormData['size']>('auto');
+    const [genQuality] = React.useState<GenerationFormData['quality']>('high');
+    const [genOutputFormat] = React.useState<GenerationFormData['output_format']>('png');
+    const [genBackground] = React.useState<GenerationFormData['background']>('auto');
+    const [genModeration] = React.useState<GenerationFormData['moderation']>('auto');
+
+
+    React.useEffect(() => {
+        return () => {
+            console.log('Revoking blob URLs:', Object.keys(blobUrlCache).length);
+            Object.values(blobUrlCache).forEach((url) => {
+                if (url.startsWith('blob:')) {
+                    URL.revokeObjectURL(url);
+                }
+            });
+        };
+    }, [blobUrlCache]);
+
+    React.useEffect(() => {
+        return () => {
+            editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+        };
+    }, [editSourceImagePreviewUrls]);
+
+    React.useEffect(() => {
+        try {
+            const storedHistory = localStorage.getItem('openaiImageHistory');
+            if (storedHistory) {
+                const parsedHistory: HistoryMetadata[] = JSON.parse(storedHistory);
+                if (Array.isArray(parsedHistory)) {
+                    setHistory(parsedHistory);
+                } else {
+                    console.warn('Invalid history data found in localStorage.');
+                    localStorage.removeItem('openaiImageHistory');
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load or parse history from localStorage:', e);
+            localStorage.removeItem('openaiImageHistory');
+        }
+        setIsInitialLoad(false);
+    }, []);
+
+    React.useEffect(() => {
+        const fetchAuthStatus = async () => {
+            try {
+                const response = await fetch('/api/auth-status');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch auth status');
+                }
+                const data = await response.json();
+                setIsPasswordRequiredByBackend(data.passwordRequired);
+            } catch (error) {
+                console.error('Error fetching auth status:', error);
+                setIsPasswordRequiredByBackend(false);
+            }
+        };
+
+        fetchAuthStatus();
+        const storedHash = localStorage.getItem('clientPasswordHash');
+        if (storedHash) {
+            setClientPasswordHash(storedHash);
+        }
+    }, []);
+
+    React.useEffect(() => {
+        if (!isInitialLoad) {
+            try {
+                localStorage.setItem('openaiImageHistory', JSON.stringify(history));
+            } catch (e) {
+                console.error('Failed to save history to localStorage:', e);
+            }
+        }
+    }, [history, isInitialLoad]);
+
+    React.useEffect(() => {
+        return () => {
+            editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+        };
+    }, [editSourceImagePreviewUrls]);
+
+
+    React.useEffect(() => {
+        const handlePaste = (event: ClipboardEvent) => {
+            if (mode !== 'edit' || !event.clipboardData) {
+                return;
+            }
+
+            if (editImageFiles.length >= MAX_EDIT_IMAGES) {
+                alert(`Cannot paste: Maximum of ${MAX_EDIT_IMAGES} images reached.`);
+                return;
+            }
+
+            const items = event.clipboardData.items;
+            let imageFound = false;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') !== -1) {
+                    const file = items[i].getAsFile();
+                    if (file) {
+                        event.preventDefault();
+                        imageFound = true;
+
+                        const previewUrl = URL.createObjectURL(file);
+
+                        setEditImageFiles((prevFiles) => [...prevFiles, file]);
+                        setEditSourceImagePreviewUrls((prevUrls) => [...prevUrls, previewUrl]);
+
+                        console.log('Pasted image added:', file.name);
+
+                        break;
+                    }
+                }
+            }
+            if (!imageFound) {
+                console.log('Paste event did not contain a recognized image file.');
+            }
+        };
+
+        window.addEventListener('paste', handlePaste);
+
+        return () => {
+            window.removeEventListener('paste', handlePaste);
+        };
+    }, [mode, editImageFiles.length]);
+
+    async function sha256Client(text: string): Promise<string> {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(text);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+        return hashHex;
+    }
+
+    const handleSavePassword = async (password: string) => {
+        if (!password.trim()) {
+            setError('Password cannot be empty.');
+            return;
+        }
+        try {
+            const hash = await sha256Client(password);
+            localStorage.setItem('clientPasswordHash', hash);
+            setClientPasswordHash(hash);
+            setError(null);
+            setIsPasswordDialogOpen(false);
+            if (passwordDialogContext === 'retry' && lastApiCallArgs) {
+                console.log('Retrying API call after password save...');
+                await handleApiCall(...lastApiCallArgs);
+            }
+        } catch (e) {
+            console.error('Error hashing password:', e);
+            setError('Failed to save password due to a hashing error.');
+        }
+    };
+
+    const handleOpenPasswordDialog = () => {
+        setPasswordDialogContext('initial');
+        setIsPasswordDialogOpen(true);
+    };
+
+    const getMimeTypeFromFormat = (format: string): string => {
+        if (format === 'jpeg') return 'image/jpeg';
+        if (format === 'webp') return 'image/webp';
+
+        return 'image/png';
+    };
+
+    const handleColoringPageSubmit = async (formData: ColoringPageFormData) => {
+        // Check if user is logged in
+        if (!user) {
+            setError('Please sign in to generate coloring pages.');
+            setIsAuthModalOpen(true);
+            return;
+        }
+
+        // Flat rate: 1 credit per coloring page regardless of number of photos
+        const creditsRequired = 1;
+        
+        // Check user's current credits from Appwrite
+        const databases = getDatabases();
+        try {
+            const profile = await databases.getDocument(
+                process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+                process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+                user.$id
+            );
+
+            if (!profile) {
+                setError('Unable to verify your credits. Please refresh the page and try again.');
+                return;
+            }
+
+            if (profile.credits < creditsRequired) {
+                setError(`Insufficient credits! You need ${creditsRequired} credit but only have ${profile.credits}. Each coloring page costs 1 credit.`);
+                return;
+            }
+        } catch (error) {
+            console.error('Error checking credits:', error);
+            setError('Unable to verify your credits. Please try again.');
+            return;
+        }
+
+        const startTime = Date.now();
+        let durationMs = 0;
+
+        setIsLoading(true);
+        setError(null);
+        setLatestImageBatch(null);
+        setImageOutputView('grid');
+
+        const apiFormData = new FormData();
+        if (isPasswordRequiredByBackend && clientPasswordHash) {
+            apiFormData.append('passwordHash', clientPasswordHash);
+        } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
+            setError('Password is required. Please configure the password by clicking the lock icon.');
+            setPasswordDialogContext('initial');
+            setIsPasswordDialogOpen(true);
+            setIsLoading(false);
+            return;
+        }
+
+        // Set up coloring page specific form data
+        apiFormData.append('mode', 'edit');
+        apiFormData.append('prompt', 'coloring-page'); // Placeholder, will be replaced by API
+        apiFormData.append('coloringPageType', formData.type);
+        apiFormData.append('nameOrMessage', formData.nameOrMessage);
+        apiFormData.append('background', formData.background);
+        apiFormData.append('orientation', formData.orientation);
+        
+        if (formData.sceneDescription) {
+            apiFormData.append('sceneDescription', formData.sceneDescription);
+        }
+
+        // Add individual names as JSON
+        if (formData.individualNames.length > 0) {
+            apiFormData.append('individualNames', JSON.stringify(formData.individualNames));
+        }
+
+        // Add set piece if present
+        if (formData.setPiece && formData.setPiece !== 'none') {
+            apiFormData.append('setPiece', formData.setPiece);
+            
+            // Add bursting-in custom text if provided
+            if (formData.setPiece === 'bursting-in' && formData.burstingInText) {
+                apiFormData.append('burstingInText', formData.burstingInText);
+            }
+        }
+
+        // Add images
+        formData.imageFiles.forEach((file, index) => {
+            apiFormData.append(`image_${index}`, file, file.name);
+        });
+
+        console.log('Sending coloring page request to /api/images');
+
+        try {
+            const response = await fetch('/api/images', {
+                method: 'POST',
+                body: apiFormData
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                if (response.status === 401 && isPasswordRequiredByBackend) {
+                    setError('Unauthorized: Invalid or missing password. Please try again.');
+                    setPasswordDialogContext('retry');
+                    setLastApiCallArgs([formData]);
+                    setIsPasswordDialogOpen(true);
+                    return;
+                }
+                throw new Error(result.error || `API request failed with status ${response.status}`);
+            }
+
+            console.log('API Response:', result);
+
+            if (result.images && result.images.length > 0) {
+                durationMs = Date.now() - startTime;
+                console.log(`Coloring page API call successful. Duration: ${durationMs}ms`);
+
+                // Deduct credits after successful generation
+                try {
+                    // Fetch current credits first
+                    const currentProfile = await databases.getDocument(
+                        process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+                        process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+                        user.$id
+                    );
+
+                    if (!currentProfile) {
+                        console.error('Error fetching current credits for deduction');
+                        setError('Generation successful but failed to deduct 1 credit. Please contact support.');
+                    } else {
+                        // Calculate new credit amount
+                        const newCredits = currentProfile.credits - creditsRequired;
+                        
+                        // Update with the calculated value
+                        try {
+                            await databases.updateDocument(
+                                process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
+                                process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
+                                user.$id,
+                                { 
+                                    credits: newCredits
+                                }
+                            );
+                            console.log(`Successfully deducted 1 credit (${currentProfile.credits} → ${newCredits})`);
+                        } catch (deductError) {
+                            console.error('Error deducting credits:', deductError);
+                            // Don't fail the generation, just log the error
+                            setError('Generation successful but failed to deduct 1 credit. Please contact support.');
+                        }
+                    }
+                } catch (creditError) {
+                    console.error('Credit deduction error:', creditError);
+                    setError('Generation successful but failed to deduct 1 credit. Please contact support.');
+                }
+
+                const batchTimestamp = Date.now();
+                const newHistoryEntry: HistoryMetadata = {
+                    timestamp: batchTimestamp,
+                    images: result.images.map((img: { filename: string }) => ({ filename: img.filename })),
+                    storageModeUsed: effectiveStorageModeClient,
+                    durationMs: durationMs,
+                    quality: 'high',
+                    background: 'auto',
+                    moderation: 'auto',
+                    output_format: 'png',
+                    prompt: `Coloring Page: ${formData.type} - ${formData.nameOrMessage || 'No title'}`,
+                    mode: 'edit'
+                };
+
+                let newImageBatchPromises: Promise<{ path: string; filename: string } | null>[] = [];
+                if (effectiveStorageModeClient === 'indexeddb') {
+                    console.log('Processing coloring page images for IndexedDB storage...');
+                    newImageBatchPromises = result.images.map(async (img: ApiImageResponseItem) => {
+                        if (img.b64_json) {
+                            try {
+                                const byteCharacters = atob(img.b64_json);
+                                const byteNumbers = new Array(byteCharacters.length);
+                                for (let i = 0; i < byteCharacters.length; i++) {
+                                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                }
+                                const byteArray = new Uint8Array(byteNumbers);
+
+                                const actualMimeType = getMimeTypeFromFormat(img.output_format);
+                                const blob = new Blob([byteArray], { type: actualMimeType });
+
+                                await db.images.put({ filename: img.filename, blob });
+                                console.log(`Saved ${img.filename} to IndexedDB with type ${actualMimeType}.`);
+
+                                const blobUrl = URL.createObjectURL(blob);
+                                setBlobUrlCache((prev) => ({ ...prev, [img.filename]: blobUrl }));
+
+                                return { filename: img.filename, path: blobUrl };
+                            } catch (dbError) {
+                                console.error(`Error saving blob ${img.filename} to IndexedDB:`, dbError);
+                                setError(`Failed to save image ${img.filename} to local database.`);
+                                return null;
+                            }
+                        } else {
+                            console.warn(`Image ${img.filename} missing b64_json in indexeddb mode.`);
+                            return null;
+                        }
+                    });
+                } else {
+                    newImageBatchPromises = result.images
+                        .filter((img: ApiImageResponseItem) => !!img.path)
+                        .map((img: ApiImageResponseItem) =>
+                            Promise.resolve({
+                                path: img.path!,
+                                filename: img.filename
+                            })
+                        );
+                }
+
+                const processedImages = (await Promise.all(newImageBatchPromises)).filter(Boolean) as {
+                    path: string;
+                    filename: string;
+                }[];
+
+                setLatestImageBatch(processedImages);
+                setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
+
+                setHistory((prevHistory) => [newHistoryEntry, ...prevHistory]);
+            } else {
+                setLatestImageBatch(null);
+                throw new Error('API response did not contain valid image data or filenames.');
+            }
+        } catch (err: unknown) {
+            durationMs = Date.now() - startTime;
+            console.error(`Coloring Page API Call Error after ${durationMs}ms:`, err);
+            const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred.';
+            setError(errorMessage);
+            setLatestImageBatch(null);
+        } finally {
+            if (durationMs === 0) durationMs = Date.now() - startTime;
+            setIsLoading(false);
+        }
+    };
+
+    const handleApiCall = async (formData: GenerationFormData | ColoringPageFormData) => {
+        const startTime = Date.now();
+        let durationMs = 0;
+
+        setIsLoading(true);
+        setError(null);
+        setLatestImageBatch(null);
+        setImageOutputView('grid');
+
+        const apiFormData = new FormData();
+        if (isPasswordRequiredByBackend && clientPasswordHash) {
+            apiFormData.append('passwordHash', clientPasswordHash);
+        } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
+            setError('Password is required. Please configure the password by clicking the lock icon.');
+            setPasswordDialogContext('initial');
+            setIsPasswordDialogOpen(true);
+            setIsLoading(false);
+            return;
+        }
+        apiFormData.append('mode', mode);
+
+        if (mode === 'generate') {
+            const genData = formData as GenerationFormData;
+            apiFormData.append('prompt', genPrompt);
+            apiFormData.append('n', genN[0].toString());
+            apiFormData.append('size', genSize);
+            apiFormData.append('quality', genQuality);
+            apiFormData.append('output_format', genOutputFormat);
+            if (
+                (genOutputFormat === 'jpeg' || genOutputFormat === 'webp') &&
+                genData.output_compression !== undefined
+            ) {
+                apiFormData.append('output_compression', genData.output_compression.toString());
+            }
+            apiFormData.append('background', genBackground);
+            apiFormData.append('moderation', genModeration);
+        } else {
+            apiFormData.append('prompt', editPrompt);
+            apiFormData.append('n', editN[0].toString());
+            apiFormData.append('size', editSize);
+            apiFormData.append('quality', editQuality);
+
+            editImageFiles.forEach((file, index) => {
+                apiFormData.append(`image_${index}`, file, file.name);
+            });
+            if (editGeneratedMaskFile) {
+                apiFormData.append('mask', editGeneratedMaskFile, editGeneratedMaskFile.name);
+            }
+        }
+
+        console.log('Sending request to /api/images with mode:', mode);
+
+        try {
+            const response = await fetch('/api/images', {
+                method: 'POST',
+                body: apiFormData
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                if (response.status === 401 && isPasswordRequiredByBackend) {
+                    setError('Unauthorized: Invalid or missing password. Please try again.');
+                    setPasswordDialogContext('retry');
+                    setLastApiCallArgs([formData]);
+                    setIsPasswordDialogOpen(true);
+
+                    return;
+                }
+                throw new Error(result.error || `API request failed with status ${response.status}`);
+            }
+
+            console.log('API Response:', result);
+
+            if (result.images && result.images.length > 0) {
+                durationMs = Date.now() - startTime;
+                console.log(`API call successful. Duration: ${durationMs}ms`);
+
+                let historyQuality: GenerationFormData['quality'] = 'auto';
+                let historyBackground: GenerationFormData['background'] = 'auto';
+                let historyModeration: GenerationFormData['moderation'] = 'auto';
+                let historyOutputFormat: GenerationFormData['output_format'] = 'png';
+                let historyPrompt: string = '';
+
+                if (mode === 'generate') {
+                    historyQuality = genQuality;
+                    historyBackground = genBackground;
+                    historyModeration = genModeration;
+                    historyOutputFormat = genOutputFormat;
+                    historyPrompt = genPrompt;
+                } else {
+                    historyQuality = editQuality;
+                    historyBackground = 'auto';
+                    historyModeration = 'auto';
+                    historyOutputFormat = 'png';
+                    historyPrompt = editPrompt;
+                }
+
+                const batchTimestamp = Date.now();
+                const newHistoryEntry: HistoryMetadata = {
+                    timestamp: batchTimestamp,
+                    images: result.images.map((img: { filename: string }) => ({ filename: img.filename })),
+                    storageModeUsed: effectiveStorageModeClient,
+                    durationMs: durationMs,
+                    quality: historyQuality,
+                    background: historyBackground,
+                    moderation: historyModeration,
+                    output_format: historyOutputFormat,
+                    prompt: historyPrompt,
+                    mode: mode
+                };
+
+                let newImageBatchPromises: Promise<{ path: string; filename: string } | null>[] = [];
+                if (effectiveStorageModeClient === 'indexeddb') {
+                    console.log('Processing images for IndexedDB storage...');
+                    newImageBatchPromises = result.images.map(async (img: ApiImageResponseItem) => {
+                        if (img.b64_json) {
+                            try {
+                                const byteCharacters = atob(img.b64_json);
+                                const byteNumbers = new Array(byteCharacters.length);
+                                for (let i = 0; i < byteCharacters.length; i++) {
+                                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                }
+                                const byteArray = new Uint8Array(byteNumbers);
+
+                                const actualMimeType = getMimeTypeFromFormat(img.output_format);
+                                const blob = new Blob([byteArray], { type: actualMimeType });
+
+                                await db.images.put({ filename: img.filename, blob });
+                                console.log(`Saved ${img.filename} to IndexedDB with type ${actualMimeType}.`);
+
+                                const blobUrl = URL.createObjectURL(blob);
+                                setBlobUrlCache((prev) => ({ ...prev, [img.filename]: blobUrl }));
+
+                                return { filename: img.filename, path: blobUrl };
+                            } catch (dbError) {
+                                console.error(`Error saving blob ${img.filename} to IndexedDB:`, dbError);
+                                setError(`Failed to save image ${img.filename} to local database.`);
+                                return null;
+                            }
+                        } else {
+                            console.warn(`Image ${img.filename} missing b64_json in indexeddb mode.`);
+                            return null;
+                        }
+                    });
+                } else {
+                    newImageBatchPromises = result.images
+                        .filter((img: ApiImageResponseItem) => !!img.path)
+                        .map((img: ApiImageResponseItem) =>
+                            Promise.resolve({
+                                path: img.path!,
+                                filename: img.filename
+                            })
+                        );
+                }
+
+                const processedImages = (await Promise.all(newImageBatchPromises)).filter(Boolean) as {
+                    path: string;
+                    filename: string;
+                }[];
+
+                setLatestImageBatch(processedImages);
+                setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
+
+                setHistory((prevHistory) => [newHistoryEntry, ...prevHistory]);
+            } else {
+                setLatestImageBatch(null);
+                throw new Error('API response did not contain valid image data or filenames.');
+            }
+        } catch (err: unknown) {
+            durationMs = Date.now() - startTime;
+            console.error(`API Call Error after ${durationMs}ms:`, err);
+            const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred.';
+            setError(errorMessage);
+            setLatestImageBatch(null);
+        } finally {
+            if (durationMs === 0) durationMs = Date.now() - startTime;
+            setIsLoading(false);
+        }
+    };
+
+
+    const handleSendToEdit = async (filename: string) => {
+        if (isSendingToEdit) return;
+        setIsSendingToEdit(true);
+        setError(null);
+
+        const alreadyExists = editImageFiles.some((file) => file.name === filename);
+        if (mode === 'edit' && alreadyExists) {
+            console.log(`Image ${filename} already in edit list.`);
+            setIsSendingToEdit(false);
+            return;
+        }
+
+        if (mode === 'edit' && editImageFiles.length >= MAX_EDIT_IMAGES) {
+            setError(`Cannot add more than ${MAX_EDIT_IMAGES} images to the edit form.`);
+            setIsSendingToEdit(false);
+            return;
+        }
+
+        console.log(`Sending image ${filename} to edit...`);
+
+        try {
+            let blob: Blob | undefined;
+            let mimeType: string = 'image/png';
+
+            if (effectiveStorageModeClient === 'indexeddb') {
+                console.log(`Fetching blob ${filename} from IndexedDB...`);
+
+                const record = allDbImages?.find((img) => img.filename === filename);
+                if (record?.blob) {
+                    blob = record.blob;
+                    mimeType = blob.type || mimeType;
+                    console.log(`Found blob ${filename} in IndexedDB.`);
+                } else {
+                    throw new Error(`Image ${filename} not found in local database.`);
+                }
+            } else {
+                console.log(`Fetching image ${filename} from API...`);
+                const response = await fetch(`/api/image/${filename}`);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch image: ${response.statusText}`);
+                }
+                blob = await response.blob();
+                mimeType = response.headers.get('Content-Type') || mimeType;
+                console.log(`Fetched image ${filename} from API.`);
+            }
+
+            if (!blob) {
+                throw new Error(`Could not retrieve image data for ${filename}.`);
+            }
+
+            const newFile = new File([blob], filename, { type: mimeType });
+            const newPreviewUrl = URL.createObjectURL(blob);
+
+            editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+
+            setEditImageFiles([newFile]);
+            setEditSourceImagePreviewUrls([newPreviewUrl]);
+
+            if (mode === 'generate') {
+                setMode('edit');
+            }
+
+            console.log(`Successfully set ${filename} in edit form.`);
+        } catch (err: unknown) {
+            console.error('Error sending image to edit:', err);
+            const errorMessage = err instanceof Error ? err.message : 'Failed to send image to edit form.';
+            setError(errorMessage);
+        } finally {
+            setIsSendingToEdit(false);
+        }
+    };
+
+
+
+    return (
+        <main className='flex min-h-screen flex-col items-center bg-black p-4 text-white md:p-8 lg:p-12'>
+            <PasswordDialog
+                isOpen={isPasswordDialogOpen}
+                onOpenChange={setIsPasswordDialogOpen}
+                onSave={handleSavePassword}
+                title={passwordDialogContext === 'retry' ? 'Password Required' : 'Configure Password'}
+                description={
+                    passwordDialogContext === 'retry'
+                        ? 'The server requires a password, or the previous one was incorrect. Please enter it to continue.'
+                        : 'Set a password to use for API requests.'
+                }
+            />
+            
+            <AuthModal 
+                isOpen={isAuthModalOpen} 
+                onClose={() => setIsAuthModalOpen(false)} 
+            />
+            
+            {/* Authentication Header */}
+            <div className='w-full max-w-7xl mb-6 flex justify-end'>
+                {authLoading ? (
+                    <div className='text-gray-400'>Loading...</div>
+                ) : user ? (
+                    <UserProfile />
+                ) : (
+                    <Button
+                        onClick={() => setIsAuthModalOpen(true)}
+                        variant="outline"
+                        className="border-gray-600 bg-gray-800/50 text-white hover:bg-gray-700 hover:text-white"
+                    >
+                        <LogIn className="w-4 h-4 mr-2" />
+                        Sign In
+                    </Button>
+                )}
+            </div>
+            
+            <div className='w-full max-w-7xl space-y-6'>
+                <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
+                    <div className='relative flex min-h-[80vh] flex-col lg:col-span-1'>
+                        <ColoringPageForm
+                            onSubmitAction={handleColoringPageSubmit}
+                            isLoading={isLoading || isSendingToEdit}
+                            isPasswordRequiredByBackend={isPasswordRequiredByBackend}
+                            clientPasswordHash={clientPasswordHash}
+                            onOpenPasswordDialogAction={handleOpenPasswordDialog}
+                        />
+                    </div>
+                    <div className='flex min-h-[80vh] flex-col lg:col-span-1'>
+                        {error && (
+                            <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
+                                <AlertTitle className='text-red-200'>Error</AlertTitle>
+                                <AlertDescription>{error}</AlertDescription>
+                            </Alert>
+                        )}
+                        <ImageOutput
+                            imageBatch={latestImageBatch}
+                            viewMode={imageOutputView}
+                            onViewChange={setImageOutputView}
+                            altText='Generated image output'
+                            isLoading={isLoading || isSendingToEdit}
+                            onSendToEdit={handleSendToEdit}
+                            currentMode={mode}
+                            baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
+                        />
+                    </div>
+                </div>
+            </div>
+        </main>
+    );
+}
