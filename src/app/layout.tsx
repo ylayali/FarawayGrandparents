@@ -4,6 +4,9 @@ import { AuthProvider } from '@/components/auth-context';
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 
+// Force dynamic rendering for all pages
+export const dynamic = 'force-dynamic';
+
 const geistSans = Geist({
     variable: '--font-geist-sans',
     subsets: ['latin']
