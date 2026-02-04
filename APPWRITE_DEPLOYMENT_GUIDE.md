@@ -34,10 +34,14 @@ This is the modern, automated approach - similar to Vercel.
    - Choose your Git provider (GitHub, GitLab, or Bitbucket)
    - Select your repository
 
-3. **Configure build settings**
-   - **Build command**: `npm run build`
-   - **Output directory**: `.next`
-   - **Install command**: `npm install`
+3. **Configure build settings** (IMPORTANT - use these exact settings)
+   - **Root Directory**: Leave empty or set to `/` (root of repo)
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `.next` (standalone mode will be configured automatically)
+   - **Install Command**: `npm install`
+   - **Node Version**: `20` or higher
+   
+   Note: Appwrite Sites will automatically detect Next.js and configure it properly. The `appwrite.json` file in the repository provides additional configuration hints.
 
 4. **Set environment variables**
    - In Appwrite Console, go to your Site settings
