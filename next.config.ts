@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
     // Disable TypeScript type checking during builds
     ignoreBuildErrors: true,
   },
-  // Optimize webpack for Appwrite Sites
+  // Optimize webpack
   webpack: (config) => {
     config.watchOptions = {
       poll: 1000,

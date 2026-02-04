@@ -143,15 +143,17 @@ function generateColoringPagePrompt(
             const numPhotosCartoon = individualNames.length;
             const isMultiplePhotosCartoon = numPhotosCartoon > 1;
             
-            // Build activities description for multiple photos with bursting-in support
+            // Build activities description for multiple photos
             let activitiesDesc = '';
+            let burstingFigures: number[] = []; // Track which figures should burst
+            
             if (isMultiplePhotosCartoon) {
                 const acts = individualNames
                     .map((act, idx) => {
                         const baseDesc = act.trim() ? `the figure from photo ${idx + 1} engaged in ${act}` : `the figure from photo ${idx + 1}`;
-                        // Check if this figure has bursting-in flag set
+                        // Track which figures have bursting-in enabled
                         if (burstingInFlags && burstingInFlags[idx] && act.trim()) {
-                            return baseDesc + '. Make it look as though this figure is bursting through the paper the background is drawn on';
+                            burstingFigures.push(idx + 1);
                         }
                         return baseDesc;
                     })
@@ -159,12 +161,22 @@ function generateColoringPagePrompt(
                 activitiesDesc = acts;
             } else if (!isMultiplePhotosCartoon && hasActivity) {
                 // Single photo with activity
-                activitiesDesc = individualNames[0];
-                // Check if bursting-in flag is set
+                activitiesDesc = `engaged in ${individualNames[0]}`;
+                // Track if single figure has bursting-in enabled
                 if (burstingInFlags && burstingInFlags[0]) {
-                    activitiesDesc = `engaged in ${activitiesDesc}. Make it look as though this figure is bursting through the paper the background is drawn on`;
+                    burstingFigures.push(1);
+                }
+            }
+            
+            // Build bursting-in text to append at the end
+            let burstingText = '';
+            if (burstingFigures.length > 0) {
+                const figureNumbers = burstingFigures.map(n => `Figure ${n}`);
+                if (burstingFigures.length === 1) {
+                    burstingText = `. Make ${figureNumbers[0]} look as though it is bursting through the paper the background is drawn on`;
                 } else {
-                    activitiesDesc = `engaged in ${activitiesDesc}`;
+                    const lastFigure = figureNumbers.pop();
+                    burstingText = `. Make ${figureNumbers.join(', ')} and ${lastFigure} look as though they are bursting through the paper the background is drawn on`;
                 }
             }
             
@@ -172,63 +184,63 @@ function generateColoringPagePrompt(
                 // Special case for scene backgrounds with multiple photos
                 if (isMultiplePhotosCartoon) {
                     if (activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures arranged in a way that makes sense in a ${sceneDescription} background${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures arranged in a way that makes sense in a ${sceneDescription} background${burstingText}${setPieceAddition}`;
                     } else {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures arranged in a way that makes sense in a ${sceneDescription} background${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures arranged in a way that makes sense in a ${sceneDescription} background${burstingText}${setPieceAddition}`;
                     }
                 } else {
-                    return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. place the result in a way that makes sense in a ${sceneDescription} background${setPieceAddition}`;
+                    return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. place the result in a way that makes sense in a ${sceneDescription} background${burstingText}${setPieceAddition}`;
                 }
             } else if (background === 'plain') {
                 if (isMultiplePhotosCartoon) {
                     // Multiple photos on plain background
                     if (!hasName && activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. arrange them elegantly on a plain white background${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. arrange them elegantly on a plain white background${burstingText}${setPieceAddition}`;
                     } else if (hasName && activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on a plain white background${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on a plain white background${burstingText}${setPieceAddition}`;
                     } else if (!hasName && !activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. arrange them elegantly on a plain white background${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. arrange them elegantly on a plain white background${burstingText}${setPieceAddition}`;
                     } else {
                         // hasName && !activitiesDesc
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on a plain white background${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on a plain white background${burstingText}${setPieceAddition}`;
                     }
                 } else {
                     // Single photo on plain background
                     if (!hasName && !hasActivity) {
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. place this result as large as possible whilst still showing the entire figure, centered horizontally and vertically on a plain white background${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. place this result as large as possible whilst still showing the entire figure, centered horizontally and vertically on a plain white background${burstingText}${setPieceAddition}`;
                     } else if (hasName && !hasActivity) {
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. show the entire body. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on a plain white background${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. show the entire body. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on a plain white background${burstingText}${setPieceAddition}`;
                     } else if (!hasName && hasActivity) {
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. place this result as large as possible whilst still looking elegant, centered horizontally and vertically on a plain white background${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. place this result as large as possible whilst still looking elegant, centered horizontally and vertically on a plain white background${burstingText}${setPieceAddition}`;
                     } else {
                         // hasName && hasActivity
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on a plain white background${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on a plain white background${burstingText}${setPieceAddition}`;
                     }
                 }
             } else if (background === 'mindful-pattern') {
                 if (isMultiplePhotosCartoon) {
                     // Multiple photos on mindful coloring background
                     if (!hasName && activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. arrange them elegantly on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. arrange them elegantly on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     } else if (hasName && activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style, with ${activitiesDesc}. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     } else if (!hasName && !activitiesDesc) {
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. arrange them elegantly on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. arrange them elegantly on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     } else {
                         // hasName && !activitiesDesc
-                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the faces from the attached ${numPhotosCartoon} photos into line drawings suitable for a coloring page, ensuring accurate facial features are maintained. place each result onto a cartoon style line drawing body in the same coloring page style. show all entire figures. write ${nameOrMessage} in friendly white letters with black outline somewhere unobtrusive. arrange everything elegantly on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     }
                 } else {
                     // Single photo on mindful coloring background
                     if (!hasName && !hasActivity) {
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. show the entire figure. place this result as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. show the entire figure. place this result as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     } else if (hasName && !hasActivity) {
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. show the entire figure. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style. show the entire figure. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     } else if (!hasName && hasActivity) {
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. place this result as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. place this result as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     } else {
                         // hasName && hasActivity
-                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${setPieceAddition}`;
+                        return `turn the face from the attached photo into a line drawing suitable for a coloring page, ensuring accurate facial features are maintained. place the result onto a cartoon style line drawing body in the same coloring page style engaged in ${activitiesDesc}. show the entire figure. below this write ${nameOrMessage} in friendly white letters with black outline, suited to a coloring page. finally place this collection of objects as large as possible whilst still looking elegant, centered horizontally and vertically on top of an abstract pattern suitable for mindful coloring${burstingText}${setPieceAddition}`;
                     }
                 }
             }
@@ -459,9 +471,12 @@ export async function POST(request: NextRequest) {
                         const storage = await getStorage();
                         const bucketId = process.env.NEXT_PUBLIC_APPWRITE_IMAGES_BUCKET_ID!;
                         
-                        // Create a File object from the buffer
+                        // Use InputFile for Node.js compatibility (Vercel serverless)
                         const mimeType = fileExtension === 'png' ? 'image/png' : fileExtension === 'jpeg' ? 'image/jpeg' : 'image/webp';
-                        const file = new File([buffer], filename, { type: mimeType });
+                        
+                        // Create a File-like object for Appwrite
+                        const fileParts = [buffer] as any;
+                        const file = new File(fileParts, filename, { type: mimeType }) as any;
                         
                         const uploadResult = await storage.createFile(
                             bucketId,
