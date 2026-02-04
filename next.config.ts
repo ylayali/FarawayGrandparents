@@ -1,8 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Disable static optimization completely for AppWrite
-  output: 'standalone',
   eslint: {
     // Disable ESLint during builds to prevent unused import errors
     ignoreDuringBuilds: true,
