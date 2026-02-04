@@ -9,6 +9,8 @@ const nextConfig: NextConfig = {
     // Disable TypeScript type checking during builds
     ignoreBuildErrors: true,
   },
+  // Mark next-themes as external package to avoid bundling issues
+  serverExternalPackages: ['next-themes'],
   // Optimize webpack
   webpack: (config) => {
     config.watchOptions = {
